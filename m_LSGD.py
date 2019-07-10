@@ -132,8 +132,11 @@ def main():
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    local_size = 4 #(int)(os.environ['OMPI_COMM_WORLD_LOCAL_SIZE'])
-    local_rank = 1 #(int)(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+    #local_size = 4 #(int)(os.environ['OMPI_COMM_WORLD_LOCAL_SIZE'])
+    #local_rank = 1 #(int)(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+    local_size = (int)(os.environ['SLURM_NTASKS_PER_NODE'])
+    local_rank = (int)(os.environ['SLURM_LOCALID'])
+    
 
     node_num = world_size // local_size
 
