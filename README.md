@@ -11,11 +11,7 @@
 
 ***********
 
-Currently model- and pipeline-model- parallel are only supported for ResNet50 architecture. Only 2 GPUs are used for model-parallel.
-
-Local_rank and Local_size is hard-coded in m_LSGD.py
-
-CUDA out-of-memory if running on 2 nodes, 4 GPUs per node.
+Currently model- and pipeline-model- parallel are only supported for ResNet50 architecture. Only 2 GPUs are used for 1 model-parallel.
 
 
 
