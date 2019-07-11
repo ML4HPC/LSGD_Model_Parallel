@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 import math
 import random
 import shutil
@@ -18,15 +19,12 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
+
 from model_parallel import ModelParallelResNet50
 from model_parallel import PipelineParallelResNet50
 
 from torchvision.models.resnet import Bottleneck
 num_classes = 1000
-
-#print(ModelParallelResNet50)
-#print(PipelineParallelResNet50)
-
 
 
 model_names = sorted(name for name in models.__dict__
@@ -73,9 +71,9 @@ parser.add_argument('--dist-backend', default='gloo', type=str,
                     help='distributed backend')
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
-#parser.add_argument('--gpu', default=None, type=int, help='GPU id to use.')
-parser.add_argument('--gpu-num', default=None, type=int, help='The number of GPUs in a node.')
-parser.add_argument('--cuda', type=str, default=True)
+parser.add_argument('--gpu', default=None, type=int, help='Used GPU Numbers.')
+parser.add_argument('--train-workers', default=1, type=int, help='The number of workers in a node.')
+#parser.add_argument('--cuda', type=str, default=True)
 
 best_prec1 = 0
 
@@ -132,11 +130,12 @@ def main():
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
-    #local_size = 4 #(int)(os.environ['OMPI_COMM_WORLD_LOCAL_SIZE'])
-    #local_rank = 1 #(int)(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-    local_size = (int)(os.environ['SLURM_NTASKS_PER_NODE'])
-    local_rank = (int)(os.environ['SLURM_LOCALID'])
-    
+    #local_size = int((os.environ['SLURM_TASKS_PER_NODE'])[0])*int((os.environ['SLURM_TASKS_PER_NODE'])[-2])
+    local_size = int((os.environ['SLURM_NTASKS_PER_NODE']))
+    local_rank = int((os.environ['SLURM_LOCALID']))
+    #print("local_rank is {}".format(local_rank))
+
+    args.cuda = args.gpu is not None
 
     node_num = world_size // local_size
 
@@ -165,7 +164,7 @@ def main():
 
     if rank==0: print('comm_handle : ', comm_handle_idx)
     if rank==0: print('pytorch version : ', torch.__version__)
-    if rank==0: print('cuDNN version : ', torch.backends.cudnn.version())
+    if rank==0 and args.cuda : print('cuDNN version : ', torch.backends.cudnn.version())
     if rank==0: print('WORLD SIZE:', world_size)
     if rank==0: print('The number of nodes : ', node_num)
     if rank==0: print('The number of ranks in a node : ', local_size)
@@ -174,12 +173,10 @@ def main():
 
 
 
-    args.cuda = args.gpu_num is not None
-    if args.cuda:
-        if local_rank > 0 and local_rank <= args.gpu_num:
-            torch.cuda.set_device(local_rank-1)
-        else:
-            args.cuda=False
+#    if args.cuda:
+#        if local_rank > 0 and local_rank <= args.train_workers:
+#            pass
+            #torch.cuda.set_device(local_rank-1)
 
     comm_rank = False
     if rank % local_size == 0:
@@ -190,10 +187,7 @@ def main():
     dist.barrier();
     if rank==0: print('========================================================')
     dist.barrier();
-#    print('[',rank,'] : OMPI_COMM_WORLD_LOCAL_RANK : ', os.environ['OMPI_COMM_WORLD_LOCAL_RANK'], ', Node : ', node_idx, ', GPU : ', args.cuda, ', COMM_RANK : ', comm_rank)
- 
-    print('dummy print between barrier')
-
+    print('[',rank,'] : LOCAL_RANK : ', local_rank, ', Node : ', node_idx, ', WORKER : ', not comm_rank, ', COMM_RANK : ', comm_rank)
     dist.barrier();
     if rank==0: print('========================================================')
     dist.barrier();
@@ -242,20 +236,25 @@ def main():
     #        model.cuda()
     #    else:
     #        model = torch.nn.DataParallel(model).cuda()
-    if args.cuda:
-
-        ModelParallelResNet50()
-        PipelineParallelResNet50()
-        model = PipelineParallelResNet50()
-        
-
+    
+    
+#    if args.cuda:
+#        if comm_rank:
+#            ranks = [rank, rank + local_size]
+#            ModelParallelResNet50([ranks])
+#            model = PipelineParallelResNet50([ranks])
+#            #model = PipelineParallelResNet50()
+#            print('helloooooooooooo rankkkkkkkkkkkkk {}'.format(rank))
 
 
 
     # define loss function (criterion) and optimizer
     #criterion = nn.CrossEntropyLoss().cuda(args.gpu)
-    #if args.cuda:
-    criterion = nn.CrossEntropyLoss().cuda()
+ 
+
+    criterion = nn.CrossEntropyLoss()
+#    if args.cuda:
+#        criterion = nn.CrossEntropyLoss().cuda()
 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
@@ -319,7 +318,7 @@ def main():
         #else:
         #    train_sampler = None
         #train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, train_proc_num, rank)
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, train_proc_num, (args.gpu_num*node_idx + local_rank - 1))
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, train_proc_num, (args.train_workers*node_idx + local_rank - 1))
 
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
@@ -329,7 +328,7 @@ def main():
         if rank==1 : 
             print('train_loader length : ', len(train_loader))
             print('train_loader length : ', math.ceil(1281168/float(args.batch_size * train_proc_num)))
-            print('(node_num * args.gpu_num) : ', (node_num * args.gpu_num))
+            print('(node_num * args.train_workers) : ', (node_num * args.train_workers))
             print('train_proc_num : ', train_proc_num)
 
             val_loader = torch.utils.data.DataLoader(
@@ -347,6 +346,9 @@ def main():
     #    validate(val_loader, model, criterion)
     #    return
 
+
+
+    sys.stdout.flush()
     dist.barrier()
 
 
@@ -366,6 +368,8 @@ def main():
         end = time.time()
         total_training = total_training + (end - start)
         if rank==0: print('Epoch ['+str(epoch+1)+'] time : ' + str(end - start) + ' with loss : ' + str(train_loss))
+
+        sys.stdout.flush()
 
         if rank==1:
             # evaluate on validation set
@@ -396,8 +400,6 @@ def main():
             'best_prec1': best_prec1,
             'optimizer' : optimizer.state_dict(),
         }, False)
-
-
 
 def train(comm_rank, node_handle, node_idx, comm_handle, train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -454,9 +456,19 @@ def train(comm_rank, node_handle, node_idx, comm_handle, train_loader, model, cr
             #print('[',rank,'] : input.size(0): ', input.size(0)
             # measure data loading time
             #data_time.update(time.time() - end)
+          
+            if args.cuda and (rank > 0 and rank < local_size):
+                #if (local_rank > 0 and rank < local_size):
+                ranks = [rank, rank + local_size]
+                ModelParallelResNet50([ranks])
+                model = PipelineParallelResNet50([ranks])
+                #model = PipelineParallelResNet50()
+                print('helloooooooooooo rankkkkkkkkkkkkk {}'.format(rank))
 
-            input = input.cuda('cuda:0')
-            target = target.cuda('cuda:1')
+                input = input.cuda('cuda:'+str(ranks[0]))
+                target = target.cuda('cuda:'+str(ranks[1]))
+
+                print('I am loading dataaaaaaaaaaaaaaaaaa!')
  
             if i > 0:
                 for param in model.parameters():
@@ -485,6 +497,9 @@ def train(comm_rank, node_handle, node_idx, comm_handle, train_loader, model, cr
             for param in model.parameters():
                 dist.reduce(param.grad.data, local_root, op=dist.ReduceOp.SUM, group=node_handle[node_idx])
 
+
+        print("is it traing?")
+        sys.stdout.flush()
 
             # measure elapsed time
             #batch_time.update(time.time() - end)
@@ -519,8 +534,10 @@ def validate(val_loader, model, criterion):
     with torch.no_grad():
         end = time.time()
         for i, (input, target) in enumerate(val_loader):
-            input = input.cuda()
-            target = target.cuda()
+            
+            if args.cuda:
+                input = input.cuda()
+                target = target.cuda()
 
             # compute output
             output = model(input)
